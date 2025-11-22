@@ -16,6 +16,10 @@ const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 
 // Middleware
+// Add this BEFORE rate limiting middleware
+app.set('trust proxy', 1); // Trust Render's proxy
+
+// Middleware
 app.use(helmet());
 app.use(cors({
   origin: [
@@ -29,10 +33,14 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
+// Rate limiting - NOW this will work correctly
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 100, // limit each IP to 100 requests per windowMs
+  skip: (req) => req.path === '/health', // Don't rate limit health checks
+  keyGenerator: (req, res) => {
+    return req.ip; // Use IP directly
+  }
 });
 app.use('/api/', limiter);
 app.get('/', (req, res) => {
