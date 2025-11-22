@@ -35,6 +35,10 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use('/api/', limiter);
+app.get('/', (req, res) => {
+  res.send('<h1>Hello Root</h1>');
+});
+
 
 // Serve static files (sign images)
 app.use('/signs', express.static(path.join(__dirname, 'signs')));
@@ -432,5 +436,6 @@ if (fs.existsSync(modelPath)) {
 } else {
   console.log('⚠️ Clean Python model NOT found');
 }
+
 
 });
