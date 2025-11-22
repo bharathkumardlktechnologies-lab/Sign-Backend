@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sign-language-node
+    env: node
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10 # choose the version supported
+    autoDeploy: true
+
