@@ -316,20 +316,28 @@ app.post('/api/predict/camera', authenticateToken, upload.single('image'), async
 // ===== UTILITY FUNCTIONS =====
 
 // Function to call Python model
+// Function to call Python model - FIXED FOR RENDER
 function callPythonModel(imagePath) {
   return new Promise((resolve) => {
     
     const absoluteImagePath = path.resolve(imagePath);
     const pythonPath = path.join(__dirname, "python_predictor.py");
+    
     console.log("PYTHON FILE PATH = ", pythonPath);
+    console.log("IMAGE PATH = ", absoluteImagePath);
+    console.log("FILE EXISTS:", fs.existsSync(pythonPath));
 
-    const python = spawn(
-      "python3",
-      [pythonPath, absoluteImagePath]
-    );
+    // Use 'python3' or 'python' depending on system
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+    const python = spawn(pythonCmd, [pythonPath, absoluteImagePath], {
+      timeout: 60000,  // Increased timeout to 60 seconds
+      maxBuffer: 10 * 1024 * 1024  // 10MB buffer for output
+    });
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
 
     python.stdout.on("data", (data) => {
       console.log("📤 PYTHON STDOUT:", data.toString());
@@ -341,7 +349,19 @@ function callPythonModel(imagePath) {
       stderr += data.toString();
     });
 
+    python.on("error", (err) => {
+      console.log("🔴 PYTHON SPAWN ERROR:", err.message);
+      resolve({
+        success: false,
+        predictions: [],
+        confidences: [],
+        error: `Failed to spawn Python: ${err.message}`,
+      });
+    });
+
     python.on("close", (code) => {
+      if (timedOut) return; // Already resolved by timeout
+
       console.log("🔚 PYTHON EXIT CODE:", code);
       console.log("📦 PYTHON FINAL STDOUT:", stdout.trim());
       console.log("📦 PYTHON FINAL STDERR:", stderr.trim());
@@ -367,25 +387,33 @@ function callPythonModel(imagePath) {
           success: false,
           predictions: [],
           confidences: [],
-          error: stderr,
+          error: stderr || `Python exited with code ${code}`,
         });
       }
     });
 
-    setTimeout(() => {
-      python.kill();
+    // Timeout handler
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      python.kill('SIGTERM');
+      
+      console.log("⏱️ Python process timeout - killing...");
+      
+      setTimeout(() => {
+        if (!python.killed) {
+          python.kill('SIGKILL');
+        }
+      }, 5000);
+
       resolve({
         success: false,
         predictions: [],
         confidences: [],
-        error: "Prediction timeout",
+        error: "Prediction timeout (>60s)",
       });
-    }, 30000);
+    }, 60000);
   });
 }
-
-
-
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -393,6 +421,23 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
+});
+
+app.get('/api/health/python', (req, res) => {
+  const { execSync } = require('child_process');
+  try {
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const version = execSync(`${pythonCmd} --version`, { encoding: 'utf8' });
+    res.json({
+      status: 'OK',
+      pythonVersion: version,
+      platform: process.platform,
+      pathToScript: path.join(__dirname, "python_predictor.py"),
+      pythonScriptExists: fs.existsSync(path.join(__dirname, "python_predictor.py"))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Error handling middleware
