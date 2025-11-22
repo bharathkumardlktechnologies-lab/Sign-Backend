@@ -1,11 +1,13 @@
 services:
   - type: web
-    name: sign-language-node
-    env: node
-    buildCommand: "npm install"
-    startCommand: "npm start"
+    name: sign-backend
+    runtime: node
+    buildCommand: npm install && pip install -r requirements.txt
+    startCommand: node server.js
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10 # choose the version supported
-    autoDeploy: true
-
+      - key: HOST
+        value: "0.0.0.0"
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
