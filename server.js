@@ -248,22 +248,34 @@ app.post('/api/predict/photo', authenticateToken, upload.single('image'), async 
 
     const imagePath = req.file.path;
 
-    console.log(imagePath);
+    console.log("📷 Photo received:", imagePath);
     console.log("NODE: Image path received:", imagePath);
     console.log("NODE: Absolute path:", path.resolve(imagePath));
     console.log("NODE: File exists:", fs.existsSync(imagePath));
+
+    // Set extended timeout for this response only
+    res.setTimeout(300000); // 5 minutes for photo processing
 
     const pythonResult = await callPythonModel(imagePath);
 
     console.log("🟥 PYTHON RAW RESULT:", pythonResult);
 
-    fs.unlinkSync(imagePath);
+    // Clean up file
+    try {
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    } catch (e) {
+      console.log("Warning: Could not delete file:", e.message);
+    }
 
     if (!pythonResult.success) {
       return res.status(500).json({ error: 'Prediction failed', details: pythonResult.error });
     }
 
-    res.json({
+    // Send response with proper headers
+    res.set('Content-Type', 'application/json');
+    res.status(200).json({
       predicted_letters: pythonResult.predictions,
       confidences: pythonResult.confidences
     });
