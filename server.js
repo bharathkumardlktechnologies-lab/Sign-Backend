@@ -15,35 +15,56 @@ const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 
-// Middleware
-app.use(helmet());
-app.use(cors({
+// ===== CRITICAL FIXES =====
+app.set('trust proxy', 1);
+
+// CORS Configuration
+const corsOptions = {
   origin: [
     'http://192.168.1.8:19006',
     'http://localhost:19006',
     'http://localhost:3000',
+    'http://localhost:8081',
     process.env.FRONTEND_URL
   ].filter(Boolean),
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Length', 'X-Content-Type-Options'],
+  maxAge: 86400,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  skip: (req) => req.path === '/health' || req.path === '/',
+  keyGenerator: (req) => req.ip,
+  handler: (req, res) => {
+    res.status(429).json({ error: 'Too many requests, please try again later.' });
+  }
 });
 app.use('/api/', limiter);
+
 app.get('/', (req, res) => {
   res.send('<h1>Hello Root</h1>');
 });
 
-
 // Serve static files (sign images)
 app.use('/signs', express.static(path.join(__dirname, 'signs')));
 
-// Simple user store (in production, use a proper database)
+// Simple user store
 const users = new Map();
 
 // JWT Authentication Middleware
@@ -64,7 +85,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Multer configuration for image uploads
+// Multer configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'uploads');
@@ -81,7 +102,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // allow up to 20MB
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -96,14 +117,12 @@ const upload = multer({
 
 // ===== AUTHENTICATION ENDPOINTS =====
 
-// Register endpoint
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
     console.log({ name, email, password });
 
-    // Validation
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' });
     }
@@ -112,16 +131,13 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
-    // Check if user already exists
     if (users.has(email)) {
       return res.status(400).json({ error: 'User already exists with this email' });
     }
 
-    // Hash password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user
     const user = {
       id: Date.now().toString(),
       name,
@@ -132,7 +148,6 @@ app.post('/api/auth/register', async (req, res) => {
 
     users.set(email, user);
 
-    // Generate JWT
     const token = jwt.sign(
       { userId: user.id, email: user.email },
       JWT_SECRET,
@@ -155,31 +170,26 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Login endpoint
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
     console.log({ email, password })
 
-    // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    // Find user
     const user = users.get(email);
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Generate JWT
     const token = jwt.sign(
       { userId: user.id, email: user.email },
       JWT_SECRET,
@@ -204,7 +214,6 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ===== PREDICTION ENDPOINTS =====
 
-// Text to Sign Images endpoint
 app.post('/api/predict/text', authenticateToken, async (req, res) => {
   try {
     const { word } = req.body;
@@ -213,11 +222,9 @@ app.post('/api/predict/text', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Word is required and must be a string' });
     }
 
-    // Convert word to uppercase and split into characters
     const uppercaseWord = word.toUpperCase();
     const letters = uppercaseWord.split('');
 
-    // Generate image URLs for each letter
     const baseUrl = process.env.BASE_URL || `http://${HOST}:${PORT}`;
     const images = letters.map(letter => `${baseUrl}/signs/${letter}.gif`);
 
@@ -233,7 +240,6 @@ app.post('/api/predict/text', authenticateToken, async (req, res) => {
   }
 });
 
-// Photo prediction endpoint
 app.post('/api/predict/photo', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -243,19 +249,14 @@ app.post('/api/predict/photo', authenticateToken, upload.single('image'), async 
     const imagePath = req.file.path;
 
     console.log(imagePath);
+    console.log("NODE: Image path received:", imagePath);
+    console.log("NODE: Absolute path:", path.resolve(imagePath));
+    console.log("NODE: File exists:", fs.existsSync(imagePath));
 
-console.log("NODE: Image path received:", imagePath);
-console.log("NODE: Absolute path:", path.resolve(imagePath));
-console.log("NODE: File exists:", fs.existsSync(imagePath));
-
-
-    // Call Python model for prediction
     const pythonResult = await callPythonModel(imagePath);
 
     console.log("🟥 PYTHON RAW RESULT:", pythonResult);
 
-
-    // Clean up uploaded file
     fs.unlinkSync(imagePath);
 
     if (!pythonResult.success) {
@@ -273,7 +274,6 @@ console.log("NODE: File exists:", fs.existsSync(imagePath));
   }
 });
 
-// Camera prediction endpoint
 app.post('/api/predict/camera', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -282,19 +282,16 @@ app.post('/api/predict/camera', authenticateToken, upload.single('image'), async
 
     const imagePath = req.file.path;
 
-    console.log("camer",imagePath)
+    console.log("camer", imagePath)
 
-    // Call Python model for prediction
     const pythonResult = await callPythonModel(imagePath);
 
-    // Clean up uploaded file
     fs.unlinkSync(imagePath);
 
     if (!pythonResult.success) {
       return res.status(500).json({ error: 'Prediction failed', details: pythonResult.error });
     }
 
-    // Return single letter prediction for camera
     if (pythonResult.predictions.length > 0) {
       res.json({
         letter: pythonResult.predictions[0],
@@ -315,8 +312,7 @@ app.post('/api/predict/camera', authenticateToken, upload.single('image'), async
 
 // ===== UTILITY FUNCTIONS =====
 
-// Function to call Python model
-// Function to call Python model - FIXED FOR RENDER
+// NO TIMEOUT - Let Python finish naturally
 function callPythonModel(imagePath) {
   return new Promise((resolve) => {
     
@@ -327,17 +323,14 @@ function callPythonModel(imagePath) {
     console.log("IMAGE PATH = ", absoluteImagePath);
     console.log("FILE EXISTS:", fs.existsSync(pythonPath));
 
-    // Use 'python3' or 'python' depending on system
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
 
     const python = spawn(pythonCmd, [pythonPath, absoluteImagePath], {
-      timeout: 60000,  // Increased timeout to 60 seconds
-      maxBuffer: 10 * 1024 * 1024  // 10MB buffer for output
+      maxBuffer: 10 * 1024 * 1024
     });
 
     let stdout = "";
     let stderr = "";
-    let timedOut = false;
 
     python.stdout.on("data", (data) => {
       console.log("📤 PYTHON STDOUT:", data.toString());
@@ -360,8 +353,6 @@ function callPythonModel(imagePath) {
     });
 
     python.on("close", (code) => {
-      if (timedOut) return; // Already resolved by timeout
-
       console.log("🔚 PYTHON EXIT CODE:", code);
       console.log("📦 PYTHON FINAL STDOUT:", stdout.trim());
       console.log("📦 PYTHON FINAL STDERR:", stderr.trim());
@@ -391,29 +382,9 @@ function callPythonModel(imagePath) {
         });
       }
     });
-
-    // Timeout handler
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      python.kill('SIGTERM');
-      
-      console.log("⏱️ Python process timeout - killing...");
-      
-      setTimeout(() => {
-        if (!python.killed) {
-          python.kill('SIGKILL');
-        }
-      }, 5000);
-
-      resolve({
-        success: false,
-        predictions: [],
-        confidences: [],
-        error: "Prediction timeout (>60s)",
-      });
-    }, 60000);
   });
 }
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -446,7 +417,7 @@ app.use((err, req, res, next) => {
 
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
+      return res.status(400).json({ error: 'File too large. Maximum size is 20MB.' });
     }
   }
 
@@ -464,8 +435,8 @@ app.listen(PORT, HOST, () => {
   console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'http://192.168.1.8:19006'}`);
   console.log(`🔐 JWT Secret: ${JWT_SECRET ? 'Configured' : 'Using default (change in production)'}`);
   console.log(`📁 Static files served from: /signs`);
+  console.log(`✅ NO TIMEOUT on predictions - Python runs until complete`);
 
-  // Check if sign images exist
   const signsDir = path.join(__dirname, 'signs');
   if (fs.existsSync(signsDir)) {
     const signFiles = fs.readdirSync(signsDir);
@@ -474,13 +445,10 @@ app.listen(PORT, HOST, () => {
     console.log('⚠️  Sign images directory not found');
   }
 
-  // Check if Python model exists
   const modelPath = path.join(__dirname, '25-737', 'asl_cnn_clean.h5');
-if (fs.existsSync(modelPath)) {
-  console.log('✅ Clean Python model found (asl_cnn_clean.h5)');
-} else {
-  console.log('⚠️ Clean Python model NOT found');
-}
-
-
+  if (fs.existsSync(modelPath)) {
+    console.log('✅ Clean Python model found (asl_cnn_clean.h5)');
+  } else {
+    console.log('⚠️ Clean Python model NOT found');
+  }
 });
